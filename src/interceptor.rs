@@ -29,8 +29,8 @@ pub struct RequestSessionKeys {
 ///
 /// # Usage
 /// ```rust,no_run
-/// use alterion_enc_pipeline::interceptor::Interceptor;
-/// use alterion_enc_pipeline::init_key_store;
+/// use alterion_encrypt::interceptor::Interceptor;
+/// use alterion_encrypt::init_key_store;
 ///
 /// let store = init_key_store(3600);
 /// // App::new().wrap(Interceptor { key_store: store })

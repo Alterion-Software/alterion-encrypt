@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-//! # alterion-enc-pipeline
+//! # alterion-encrypt
 //!
 //! The primary entry point is [`interceptor::Interceptor`]: mount it as an Actix-web middleware
 //! and every encrypted request is transparently decrypted, and every response re-encrypted,
@@ -8,8 +8,8 @@
 //! ## Example
 //!
 //! ```rust,no_run
-//! use alterion_enc_pipeline::{init_key_store, start_rotation};
-//! use alterion_enc_pipeline::interceptor::{Interceptor, DecryptedBody};
+//! use alterion_encrypt::{init_key_store, start_rotation};
+//! use alterion_encrypt::interceptor::{Interceptor, DecryptedBody};
 //! use actix_web::{web, App, HttpServer, HttpRequest, HttpMessage, HttpResponse, post, get};
 //!
 //! #[post("/api/example")]
