@@ -1,13 +1,25 @@
-# alterion-enc-pipeline
+<div align="center">
+    <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+        <source media="(prefers-color-scheme: light)" srcset="assets/logo-light.svg">
+        <img alt="Alterion Logo" src="assets/logo-dark.svg" width="400">
+    </picture>
+</div>
+
+<div align="center">
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/alterion-enc-pipeline.svg)](https://crates.io/crates/alterion-enc-pipeline)
+[![Rust](https://img.shields.io/badge/Rust-2024-orange?style=flat&logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![Actix-web](https://img.shields.io/badge/Actix--web-4-green?style=flat)](https://actix.rs/)
+[![AES-256-GCM](https://img.shields.io/badge/AES--256--GCM-Encrypted-blue?style=flat)](https://docs.rs/aes-gcm)
+[![GitHub](https://img.shields.io/badge/GitHub-Chace--Berry-181717?style=flat&logo=github&logoColor=white)](https://github.com/Chace-Berry)
 
-A full end-to-end encryption pipeline for Actix-web applications, developed by **Alterion Software**.
-
-The primary entry point is the [`Interceptor`] middleware. Mount it on your Actix-web app and every request/response is transparently encrypted — no per-handler boilerplate required.
+_A full end-to-end encryption pipeline for Actix-web — RSA key rotation, AES-256-GCM session encryption, Argon2id password hashing, and a MessagePack + Deflate request/response pipeline, all behind a single middleware._
 
 ---
+
+</div>
 
 ## What it does
 
@@ -20,7 +32,7 @@ Client → [AES-256-GCM encrypted body] + [RSA-OAEP-SHA256 encrypted AES key] + 
 The `Interceptor` middleware:
 
 1. **Decrypts the request** — RSA-unwraps the AES key using the active key-store entry, then AES-decrypts the payload. The raw bytes are injected into request extensions as `DecryptedBody` for your handlers to read.
-2. **Encrypts the response** — Takes the JSON response body and pipes it through: `Deflate → MessagePack → AES-256-GCM → HMAC-SHA256`, returning a `SignedResponse` packet.
+2. **Encrypts the response** — Takes the JSON response body and pipes it through: `Deflate → MessagePack → AES-256-GCM → HMAC-SHA256`, returning a signed `SignedResponse` packet.
 
 The RSA key pair rotates automatically on a configurable interval with a grace window so in-flight requests using the previous key still succeed.
 
@@ -49,7 +61,7 @@ alterion_enc_pipeline
 
 ```toml
 [dependencies]
-alterion-enc-pipeline = { git = "https://github.com/Alterion-Software/alterion-enc-pipeline" }
+alterion-enc-pipeline = "0.1"
 ```
 
 ### 2. Initialise the key store and mount the interceptor
@@ -81,7 +93,7 @@ async fn main() -> std::io::Result<()> {
 ### 3. Read the decrypted body in a handler
 
 ```rust
-use actix_web::{post, web, HttpRequest, HttpMessage, HttpResponse};
+use actix_web::{post, HttpRequest, HttpMessage, HttpResponse};
 use alterion_enc_pipeline::interceptor::DecryptedBody;
 
 #[post("/api/example")]
@@ -96,8 +108,6 @@ async fn example_handler(req: HttpRequest) -> HttpResponse {
 ```
 
 ### 4. Expose the current public key to clients
-
-Clients need the RSA public key to encrypt their requests. Expose it from an unprotected endpoint:
 
 ```rust
 use actix_web::{get, web, HttpResponse};
@@ -123,9 +133,9 @@ async fn public_key_handler(
 | `init_key_store(interval_secs)` | Generates the initial RSA-2048 key pair and wraps it in an `Arc<RwLock<KeyStore>>` |
 | `start_rotation(store, interval_secs)` | Spawns a background task that rotates the key every `interval_secs` seconds |
 | `get_current_public_key(store)` | Returns `(key_id, pem)` for the active key |
-| `decrypt(store, key_id, cdata)` | RSA-OAEP-SHA256 decrypts `cdata` using the matching key (falls back to the previous key within its grace window) |
+| `decrypt(store, key_id, cdata)` | RSA-OAEP-SHA256 decrypts `cdata`, falling back to the previous key within its grace window |
 
-The grace window is fixed at **300 seconds** (5 minutes). This means the previous key remains valid for 5 minutes after rotation, so any request that was encrypted just before a rotation still decrypts successfully.
+The grace window is fixed at **300 seconds**. The previous key remains valid for 5 minutes after rotation so any request encrypted just before a rotation still decrypts successfully.
 
 > **Frontend note:** Pre-fetch a new public key at `rotation_interval − 300` seconds so the cached key is never stale when a rotation occurs.
 
@@ -139,17 +149,16 @@ The grace window is fixed at **300 seconds** (5 minutes). This means the previou
 use alterion_enc_pipeline::tools::crypt;
 
 // AES-256-GCM (nonce prepended to output)
-let key = [0u8; 32];
-let ct  = crypt::aes_encrypt(b"hello", &key)?;
-let pt  = crypt::aes_decrypt(&ct, &key)?;
+let ct = crypt::aes_encrypt(b"hello", &key)?;
+let pt = crypt::aes_decrypt(&ct, &key)?;
 
 // Argon2id password hashing with HMAC-pepper
 let (hash, pepper_version) = crypt::hash_password("my-password")?;
 let valid = crypt::verify_password("my-password", &hash, pepper_version)?;
 
 // Argon2id KDF — encrypt/decrypt a secret string with a password
-let blob    = crypt::key_encrypt("secret value", "master-password")?;
-let secret  = crypt::key_decrypt(&blob, "master-password")?;
+let blob   = crypt::key_encrypt("secret value", "master-password")?;
+let secret = crypt::key_decrypt(&blob, "master-password")?;
 ```
 
 ### `tools::serializer`
@@ -164,46 +173,27 @@ let bytes = serializer::build_signed_response(&my_struct, &aes_key)?;
 let payload: MyStruct = serializer::decode_request_payload(&decrypted_bytes)?;
 ```
 
-### `tools::helper::sha2`
+### `tools::helper`
 
 ```rust
-use alterion_enc_pipeline::tools::helper::sha2;
+use alterion_enc_pipeline::tools::helper::{sha2, hmac, pstore};
 
-let hex  = sha2::hash_hex(b"some data");         // → 64-char lowercase hex
-let raw  = sha2::hash(b"some data");              // → [u8; 32]
-let file = sha2::hash_file(Path::new("a.bin"))?; // → hex string
-```
+// SHA-256
+let hex  = sha2::hash_hex(b"some data");
+let file = sha2::hash_file(Path::new("a.bin"))?;
 
-### `tools::helper::hmac`
-
-```rust
-use alterion_enc_pipeline::tools::helper::hmac;
-
+// HMAC-SHA256 (constant-time verify)
 let sig   = hmac::sign(b"data", &key);
-let valid = hmac::verify(b"data", &key, &sig); // constant-time
-```
+let valid = hmac::verify(b"data", &key, &sig);
 
-### `tools::helper::pstore`
-
-Pepper versions are stored in the OS native keyring under service `"alterion-enc-pipeline"`.
-Peppers are 32 random bytes, hex-encoded at rest.
-
-| Platform | Backend |
-|---|---|
-| Linux | Secret Service (e.g. GNOME Keyring, KWallet) |
-| macOS | Keychain |
-| Windows | Credential Manager |
-
-```rust
-use alterion_enc_pipeline::tools::helper::pstore;
-
+// OS keyring pepper store (Secret Service / Keychain / Credential Manager)
 let (pepper, version) = pstore::get_current_pepper()?;
 let new_version       = pstore::rotate_pepper()?;
 ```
 
 ---
 
-## Response pipeline (detail)
+## Response pipeline
 
 ```
 Handler returns JSON bytes
@@ -227,7 +217,13 @@ Handler returns JSON bytes
   MessagePack encode  ──→  sent to client
 ```
 
-The client verifies the HMAC before decrypting. If verification fails, the response must be discarded.
+The client verifies the HMAC before decrypting. If verification fails the response must be discarded.
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Open an issue before writing any code.
 
 ---
 
@@ -235,4 +231,14 @@ The client verifies the HMAC before decrypting. If verification fails, the respo
 
 GNU General Public License v3.0 — see [LICENSE](LICENSE).
 
-© Alterion Software
+---
+
+<div align="center">
+
+**Made with ❤️ by the Alterion Software team**
+
+[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.com/invite/3gy9gJyJY8)
+[![Website](https://img.shields.io/badge/Website-Coming%20Soon-blue?style=flat&logo=globe&logoColor=white)](.)
+[![GitHub](https://img.shields.io/badge/GitHub-Alterion%20Software-181717?style=flat&logo=github&logoColor=white)](https://github.com/Chace-Berry)
+
+</div>
