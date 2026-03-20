@@ -9,13 +9,13 @@
 <div align="center">
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
-[![Crates.io](https://img.shields.io/crates/v/alterion-enc-pipeline.svg)](https://crates.io/crates/alterion-enc-pipeline)
+[![Crates.io](https://img.shields.io/crates/v/alterion-encrypt.svg)](https://crates.io/crates/alterion-encrypt)
 [![Rust](https://img.shields.io/badge/Rust-2024-orange?style=flat&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Actix-web](https://img.shields.io/badge/Actix--web-4-green?style=flat)](https://actix.rs/)
 [![AES-256-GCM](https://img.shields.io/badge/AES--256--GCM-Encrypted-blue?style=flat)](https://docs.rs/aes-gcm)
 [![GitHub](https://img.shields.io/badge/GitHub-Alterion--Software-181717?style=flat&logo=github&logoColor=white)](https://github.com/Alterion-Software)
 
-_A full end-to-end encryption pipeline for Actix-web — RSA key rotation, AES-256-GCM session encryption, Argon2id password hashing, and a MessagePack + Deflate request/response pipeline, all behind a single middleware._
+_A full end-to-end encryption pipeline for Actix-web — X25519 ECDH key exchange, AES-256-GCM session encryption, Argon2id password hashing, and a MessagePack + Deflate request/response pipeline, all behind a single middleware._
 
 ---
 
@@ -26,23 +26,22 @@ _A full end-to-end encryption pipeline for Actix-web — RSA key rotation, AES-2
 Each request from the client is packaged as a `WrappedPacket`:
 
 ```
-Client → [AES-256-GCM encrypted body] + [RSA-OAEP-SHA256 encrypted AES key] + [key_id]
+Client → [AES-256-GCM encrypted body] + [ephemeral X25519 public key] + [key_id] + [timestamp] + [HMAC]
 ```
 
 The `Interceptor` middleware:
 
-1. **Decrypts the request** — RSA-unwraps the AES key using the active key-store entry, then AES-decrypts the payload. The raw bytes are injected into request extensions as `DecryptedBody` for your handlers to read.
+1. **Decrypts the request** — performs X25519 ECDH with the client's ephemeral key, derives `enc_key` and `mac_key` via HKDF-SHA256, verifies the packet MAC, then AES-decrypts the payload. The raw bytes are injected into request extensions as `DecryptedBody` for your handlers to read.
 2. **Encrypts the response** — Takes the JSON response body and pipes it through: `Deflate → MessagePack → AES-256-GCM → HMAC-SHA256`, returning a signed `SignedResponse` packet.
 
-The RSA key pair rotates automatically on a configurable interval with a grace window so in-flight requests using the previous key still succeed.
+The X25519 key pair rotates automatically on a configurable interval with a 300-second grace window so in-flight requests using the previous key still succeed.
 
 ---
 
 ## Crate layout
 
 ```
-alterion_enc_pipeline
-├── keystore       RSA-2048 key store with timed rotation and grace-window overlap
+alterion_encrypt
 ├── interceptor    Actix-web middleware — the main public API
 └── tools
     ├── crypt      AES-256-GCM encrypt/decrypt, Argon2id password hashing, Argon2id KDF
@@ -61,21 +60,20 @@ alterion_enc_pipeline
 
 ```toml
 [dependencies]
-alterion-enc-pipeline = "0.1"
+alterion-encrypt = "1.1"
+alterion-ecdh    = "0.1"
 ```
 
 ### 2. Initialise the key store and mount the interceptor
 
 ```rust
-use alterion_enc_pipeline::{
-    interceptor::Interceptor,
-    keystore::{init_key_store, start_rotation},
-};
+use alterion_encrypt::interceptor::Interceptor;
+use alterion_encrypt::{init_key_store, start_rotation};
 use actix_web::{web, App, HttpServer};
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    // Rotate RSA keys every hour; keep the previous key live for 5 minutes (grace window).
+    // Rotate X25519 keys every hour; keep the previous key live for 5 minutes.
     let store = init_key_store(3600);
     start_rotation(store.clone(), 3600);
 
@@ -94,7 +92,7 @@ async fn main() -> std::io::Result<()> {
 
 ```rust
 use actix_web::{post, HttpRequest, HttpMessage, HttpResponse};
-use alterion_enc_pipeline::interceptor::DecryptedBody;
+use alterion_encrypt::interceptor::DecryptedBody;
 
 #[post("/api/example")]
 async fn example_handler(req: HttpRequest) -> HttpResponse {
@@ -111,7 +109,7 @@ async fn example_handler(req: HttpRequest) -> HttpResponse {
 
 ```rust
 use actix_web::{get, web, HttpResponse};
-use alterion_enc_pipeline::keystore::{KeyStore, get_current_public_key};
+use alterion_encrypt::{KeyStore, get_current_public_key};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -119,10 +117,12 @@ use tokio::sync::RwLock;
 async fn public_key_handler(
     store: web::Data<Arc<RwLock<KeyStore>>>,
 ) -> HttpResponse {
-    let (key_id, pem) = get_current_public_key(&store).await;
-    HttpResponse::Ok().json(serde_json::json!({ "key_id": key_id, "public_key": pem }))
+    let (key_id, public_key_b64) = get_current_public_key(&store).await;
+    HttpResponse::Ok().json(serde_json::json!({ "key_id": key_id, "public_key": public_key_b64 }))
 }
 ```
+
+The `public_key` is a base64-encoded 32-byte X25519 public key for the client to use in ECDH.
 
 ---
 
@@ -130,10 +130,10 @@ async fn public_key_handler(
 
 | Function | Description |
 |---|---|
-| `init_key_store(interval_secs)` | Generates the initial RSA-2048 key pair and wraps it in an `Arc<RwLock<KeyStore>>` |
+| `init_key_store(interval_secs)` | Generates the initial X25519 key pair and wraps it in an `Arc<RwLock<KeyStore>>` |
 | `start_rotation(store, interval_secs)` | Spawns a background task that rotates the key every `interval_secs` seconds |
-| `get_current_public_key(store)` | Returns `(key_id, pem)` for the active key |
-| `decrypt(store, key_id, cdata)` | RSA-OAEP-SHA256 decrypts `cdata`, falling back to the previous key within its grace window |
+| `get_current_public_key(store)` | Returns `(key_id, base64_public_key)` for the active key |
+| `ecdh(store, key_id, client_pk)` | Performs X25519 ECDH, returns `(shared_secret, server_pk_bytes)` |
 
 The grace window is fixed at **300 seconds**. The previous key remains valid for 5 minutes after rotation so any request encrypted just before a rotation still decrypts successfully.
 
@@ -146,7 +146,7 @@ The grace window is fixed at **300 seconds**. The previous key remains valid for
 ### `tools::crypt`
 
 ```rust
-use alterion_enc_pipeline::tools::crypt;
+use alterion_encrypt::tools::crypt;
 
 // AES-256-GCM (nonce prepended to output)
 let ct = crypt::aes_encrypt(b"hello", &key)?;
@@ -164,10 +164,10 @@ let secret = crypt::key_decrypt(&blob, "master-password")?;
 ### `tools::serializer`
 
 ```rust
-use alterion_enc_pipeline::tools::serializer;
+use alterion_encrypt::tools::serializer;
 
 // Build an AES+HMAC signed response from any Serialize type
-let bytes = serializer::build_signed_response(&my_struct, &aes_key)?;
+let bytes = serializer::build_signed_response(&my_struct, &enc_key, &mac_key)?;
 
 // Decode an incoming request payload (msgpack → deflate → JSON)
 let payload: MyStruct = serializer::decode_request_payload(&decrypted_bytes)?;
@@ -176,7 +176,7 @@ let payload: MyStruct = serializer::decode_request_payload(&decrypted_bytes)?;
 ### `tools::helper`
 
 ```rust
-use alterion_enc_pipeline::tools::helper::{sha2, hmac, pstore};
+use alterion_encrypt::tools::helper::{sha2, hmac, pstore};
 
 // SHA-256
 let hex  = sha2::hash_hex(b"some data");
@@ -205,10 +205,10 @@ Handler returns JSON bytes
   MessagePack encode  ──→  ByteBuf
         │
         ▼
-  AES-256-GCM encrypt  (nonce prepended)
+  AES-256-GCM encrypt  (enc_key, nonce prepended)
         │
         ▼
-  HMAC-SHA256 sign  (over the ciphertext)
+  HMAC-SHA256 sign  (mac_key, over the ciphertext)
         │
         ▼
   SignedResponse { payload: ByteBuf, hmac: ByteBuf }
