@@ -1,0 +1,50 @@
+[package]
+name = "alterion-enc-pipeline"
+version = "0.1.0"
+authors = ["Alterion Software"]
+edition = "2024"
+description = "RSA key rotation, AES-256-GCM session encryption, Argon2id password hashing, and the MessagePack/deflate request-response pipeline with an Actix-web interceptor."
+license = "GPL-3.0"
+
+[dependencies]
+# RSA
+rsa   = { version = "0.9", features = ["sha2"] }
+pkcs8 = { version = "0.10", features = ["alloc", "pkcs5", "encryption"] }
+
+# Symmetric crypto
+aes-gcm = "0.10"
+argon2  = "0.5"
+hmac    = "0.12"
+sha2    = "0.10"
+subtle  = "2"
+
+# Encoding
+hex    = "0.4"
+base64 = "0.22"
+
+# Serialization / compression
+serde       = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+serde_json  = "1"
+rmp-serde   = "1.3"
+flate2      = "1"
+
+# Pepper key store — OS native keyring (Secret Service / Keychain / Credential Manager)
+keyring = "2"
+
+# Actix (interceptor middleware)
+actix-web  = "4"
+actix-http = "3"
+futures-util = "0.3"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Utils
+rand      = "0.8"
+zeroize   = { version = "1.8", features = ["derive"] }
+chrono    = { version = "0.4", features = ["serde"] }
+uuid      = { version = "1", features = ["v4"] }
+thiserror = "2"
+tracing   = "0.1"
+anyhow    = "1"
