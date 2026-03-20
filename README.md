@@ -13,7 +13,7 @@
 [![Rust](https://img.shields.io/badge/Rust-2024-orange?style=flat&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Actix-web](https://img.shields.io/badge/Actix--web-4-green?style=flat)](https://actix.rs/)
 [![AES-256-GCM](https://img.shields.io/badge/AES--256--GCM-Encrypted-blue?style=flat)](https://docs.rs/aes-gcm)
-[![GitHub](https://img.shields.io/badge/GitHub-Chace--Berry-181717?style=flat&logo=github&logoColor=white)](https://github.com/Chace-Berry)
+[![GitHub](https://img.shields.io/badge/GitHub-Alterion--Software-181717?style=flat&logo=github&logoColor=white)](https://github.com/Alterion-Software)
 
 _A full end-to-end encryption pipeline for Actix-web — RSA key rotation, AES-256-GCM session encryption, Argon2id password hashing, and a MessagePack + Deflate request/response pipeline, all behind a single middleware._
 
@@ -239,6 +239,6 @@ GNU General Public License v3.0 — see [LICENSE](LICENSE).
 
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.com/invite/3gy9gJyJY8)
 [![Website](https://img.shields.io/badge/Website-Coming%20Soon-blue?style=flat&logo=globe&logoColor=white)](.)
-[![GitHub](https://img.shields.io/badge/GitHub-Alterion%20Software-181717?style=flat&logo=github&logoColor=white)](https://github.com/Chace-Berry)
+[![GitHub](https://img.shields.io/badge/GitHub-Alterion--Software-181717?style=flat&logo=github&logoColor=white)](https://github.com/Alterion-Software)
 
 </div>
