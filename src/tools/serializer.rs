@@ -34,6 +34,17 @@ pub fn derive_wrap_key(
     key
 }
 
+/// Derives a 32-byte HMAC key from the session AES key via HKDF-SHA256.
+///
+/// Keeps the HMAC key domain-separated from the AES encryption key so neither leaks information
+/// about the other. Used internally by [`build_signed_response_raw`] and [`decode_response_packet`].
+fn derive_response_mac_key(enc_key: &[u8; 32]) -> [u8; 32] {
+    let hk = Hkdf::<Sha256>::new(None, enc_key);
+    let mut mac_key = [0u8; 32];
+    hk.expand(b"alterion-response-mac", &mut mac_key).expect("HKDF expand failed");
+    mac_key
+}
+
 /// Outgoing encrypted request packet produced by [`build_request_packet`].
 ///
 /// `data` is the AES-256-GCM-encrypted payload. `wrapped_key` is the client's randomly-generated
@@ -51,6 +62,11 @@ pub struct Request {
     pub ts:          i64,
 }
 
+/// Encrypted response packet produced by [`build_signed_response_raw`].
+///
+/// `payload` is the AES-256-GCM-encrypted response body. `hmac` is HMAC-SHA256 over the
+/// ciphertext, keyed with a mac key derived from `enc_key` — verified by the client before
+/// decrypting via [`decode_response_packet`].
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Response {
     pub payload: ByteBuf,
@@ -146,7 +162,7 @@ pub fn build_signed_response<T: Serialize>(
 }
 
 /// Builds a signed response from raw JSON bytes:
-/// deflate compress → msgpack → AES-256-GCM (enc_key) → HMAC-SHA256 (enc_key) → `Response` → msgpack.
+/// deflate compress → msgpack → AES-256-GCM (enc_key) → HMAC-SHA256 (mac_key derived from enc_key) → `Response` → msgpack.
 pub fn build_signed_response_raw(
     json_bytes: &[u8],
     enc_key:    &[u8; 32],
@@ -155,7 +171,8 @@ pub fn build_signed_response_raw(
     let msgpacked  = serialize(&ByteBuf::from(compressed))?;
     let encrypted  = aes_encrypt(&msgpacked, enc_key)
         .map_err(|e| SerializerError::Serialize(e.to_string()))?;
-    let sig        = hmac::sign(&encrypted, enc_key);
+    let mac_key    = derive_response_mac_key(enc_key);
+    let sig        = hmac::sign(&encrypted, &mac_key);
     let response   = Response {
         payload: ByteBuf::from(encrypted),
         hmac:    ByteBuf::from(sig),
@@ -236,9 +253,10 @@ pub fn decode_response_packet<T: DeserializeOwned>(
     data:    &[u8],
     enc_key: &[u8; 32],
 ) -> Result<T, SerializerError> {
-    let signed: Response = deserialize(data)?;
+    let signed:  Response = deserialize(data)?;
+    let mac_key = derive_response_mac_key(enc_key);
 
-    if !hmac::verify(signed.payload.as_ref(), enc_key, signed.hmac.as_ref()) {
+    if !hmac::verify(signed.payload.as_ref(), &mac_key, signed.hmac.as_ref()) {
         return Err(SerializerError::Deserialize("response HMAC invalid".into()));
     }
 
@@ -297,7 +315,8 @@ mod tests {
         let bytes   = build_signed_response(&payload, &enc_key).unwrap();
         let signed: Response = deserialize(&bytes).unwrap();
 
-        assert_eq!(signed.hmac.as_ref(), hmac::sign(&signed.payload, &enc_key).as_slice());
+        let mac_key = derive_response_mac_key(&enc_key);
+        assert_eq!(signed.hmac.as_ref(), hmac::sign(&signed.payload, &mac_key).as_slice());
 
         let decrypted: Vec<u8>   = aes_decrypt(&signed.payload, &enc_key).unwrap();
         let compressed: ByteBuf  = deserialize(&decrypted).unwrap();

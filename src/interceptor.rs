@@ -41,18 +41,18 @@ pub struct RequestSessionKeys {
 ///
 /// **Request path** (POST / PUT / PATCH):
 /// 1. Collect raw body bytes.
-/// 2. MessagePack-decode a `Request` and validate timestamp.
+/// 2. MessagePack-decode a [`Request`](crate::tools::serializer::Request) and validate timestamp.
 /// 3. Perform X25519 ECDH using the server key identified by `key_id` and the client's ephemeral
 ///    public key from the packet.
-/// 4. Derive `enc_key` and `mac_key` via HKDF-SHA256 bound to both public keys.
-/// 5. Verify the packet MAC over `key_id || ts || client_pk || data`.
-/// 6. AES-256-GCM-decrypt the payload using `enc_key`.
-/// 7. Inject `DecryptedBody` and `RequestSessionKeys` into request extensions.
+/// 4. Derive a wrap key via HKDF-SHA256 and use it to AES-GCM-unwrap the client's `enc_key`.
+/// 5. AES-256-GCM-decrypt the payload using `enc_key`.
+/// 6. Inject `DecryptedBody` and `RequestSessionKeys` into request extensions.
 ///
 /// Requests whose body is not a valid `Request` are passed through unchanged.
 ///
 /// **Response path** (only when `RequestSessionKeys` was set):
-/// Deflate-compress → msgpack → AES-256-GCM (enc_key) → HMAC-SHA256 (mac_key) → msgpack.
+/// JSON → deflate compress → msgpack → AES-256-GCM (`enc_key`) → HMAC-SHA256 (mac key derived
+/// from `enc_key`) → [`Response`](crate::tools::serializer::Response) → msgpack.
 pub struct Interceptor {
     pub key_store:      Arc<RwLock<KeyStore>>,
     /// Ephemeral handshake store for forward-secret per-request ECDH.
@@ -138,8 +138,11 @@ where
                                         .map_err(|e| actix_web::error::ErrorUnauthorized(e.to_string()))?
                                 };
 
+                            let shared_bytes: &[u8; 32] = shared_secret.as_ref()
+                                .try_into()
+                                .map_err(|_| actix_web::error::ErrorInternalServerError("shared secret length invalid"))?;
                             let wrap_key = derive_wrap_key(
-                                shared_secret.as_ref().try_into().unwrap(),
+                                shared_bytes,
                                 &client_pk_bytes,
                                 &server_pk,
                             );
