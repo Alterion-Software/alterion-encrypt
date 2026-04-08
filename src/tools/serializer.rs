@@ -11,7 +11,7 @@ use sha2::Sha256;
 use crate::tools::helper::hmac;
 use crate::tools::crypt::{aes_encrypt, aes_decrypt};
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
-use rand::RngCore;
+use rand_core::{RngCore, OsRng};
 
 /// Acceptable clock skew in seconds for replay protection.
 const REPLAY_WINDOW_SECS: i64 = 30;
@@ -207,12 +207,12 @@ pub fn build_request_packet<T: Serialize>(
     let msgpacked  = serialize(&ByteBuf::from(compressed))?;
 
     let mut enc_key = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut enc_key);
+    OsRng.fill_bytes(&mut enc_key);
 
     let encrypted = aes_encrypt(&msgpacked, &enc_key)
         .map_err(|e| SerializerError::Serialize(e.to_string()))?;
 
-    let client_sk       = EphemeralSecret::random_from_rng(rand::rngs::OsRng);
+    let client_sk       = EphemeralSecret::random_from_rng(OsRng);
     let client_pk       = X25519PublicKey::from(&client_sk);
     let server_pub      = X25519PublicKey::from(*server_pk);
     let shared          = client_sk.diffie_hellman(&server_pub);
@@ -333,7 +333,7 @@ mod tests {
     fn request_response_full_roundtrip() {
         use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
 
-        let server_sk       = EphemeralSecret::random_from_rng(rand::rngs::OsRng);
+        let server_sk       = EphemeralSecret::random_from_rng(OsRng);
         let server_pk       = X25519PublicKey::from(&server_sk);
         let server_pk_bytes: [u8; 32] = server_pk.to_bytes();
 
