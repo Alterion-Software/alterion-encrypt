@@ -1,6 +1,6 @@
 [package]
 name = "alterion-encrypt"
-version = "1.3.2"
+version = "1.3.3"
 authors = ["Alterion Software"]
 edition = "2024"
 description = "X25519 ECDH key exchange, AES-256-GCM session encryption, Argon2id password hashing, and the MessagePack/deflate request-response pipeline with an Actix-web interceptor."
@@ -15,9 +15,9 @@ x25519-dalek   = "2"
 # Symmetric crypto
 aes-gcm = "0.10"
 argon2  = "0.5"
-hmac    = "0.12"
-sha2    = "0.10"
-hkdf    = "0.12"
+hmac    = "0.13"
+sha2    = "0.11"
+hkdf    = "0.13"
 subtle  = "2"
 
 # Encoding
@@ -34,7 +34,7 @@ flate2      = "1"
 # Pepper key store — Linux kernel keyring (default, no D-Bus required)
 keyutils = "0.4"
 # Windows Credential Manager — only pulled in when the `win64` feature is enabled
-keyring  = { version = "2", default-features = false, optional = true }
+keyring  = { version = "3", default-features = false, optional = true }
 
 # Actix (interceptor middleware)
 actix-web  = "4"
@@ -45,7 +45,8 @@ futures-util = "0.3"
 tokio = { version = "1", features = ["full"] }
 
 # Utils
-rand      = "0.8"
+rand      = "0.10"
+rand_core = { version = "0.6", features = ["getrandom"] }
 zeroize   = { version = "1.8", features = ["derive"] }
 chrono    = { version = "0.4", features = ["serde"] }
 uuid      = { version = "1", features = ["v4"] }
@@ -53,7 +54,7 @@ thiserror = "2"
 tracing   = "0.1"
 libc      = "0.2"
 anyhow    = "1"
-redis     = { version = "0.28", features = ["tokio-comp", "connection-manager"] }
+redis     = { version = "1.2", features = ["tokio-comp", "connection-manager"] }
 
 [features]
 # Enable Windows Credential Manager via the `keyring` crate.

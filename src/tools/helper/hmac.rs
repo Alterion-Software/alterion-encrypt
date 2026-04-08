@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, Mac, KeyInit};
 use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
