@@ -1,4 +1,44 @@
 // SPDX-License-Identifier: GPL-3.0
+//! Wire-format serialisation and the client/server encryption pipeline.
+//!
+//! ## Request pipeline (client → server)
+//!
+//! ```text
+//! T (Serialize)
+//!   → serde_json::to_vec
+//!   → deflate compress
+//!   → msgpack encode (ByteBuf)
+//!   → AES-256-GCM encrypt  (random enc_key)
+//!   → ECDH wrap enc_key    (ephemeral X25519 + HKDF-SHA256 wrap key)
+//!   → Request { data, wrapped_key, client_pk, key_id, ts }
+//!   → msgpack encode
+//!   → send over the wire
+//! ```
+//!
+//! On the server side [`Interceptor`](crate::interceptor::Interceptor) calls
+//! [`deserialize_packet`] → ECDH → [`derive_wrap_key`] → unwrap `enc_key` → AES-GCM decrypt →
+//! injects [`DecryptedBody`](crate::interceptor::DecryptedBody). Handlers then call
+//! [`decode_request_payload`] to finish the deserialisation.
+//!
+//! ## Response pipeline (server → client)
+//!
+//! ```text
+//! raw JSON bytes
+//!   → deflate compress
+//!   → msgpack encode
+//!   → AES-256-GCM encrypt  (same enc_key the client generated)
+//!   → HMAC-SHA256          (mac key = HKDF-SHA256(enc_key, "alterion-response-mac"))
+//!   → Response { payload, hmac }
+//!   → msgpack encode
+//! ```
+//!
+//! Clients call [`decode_response_packet`] which verifies the HMAC before decrypting.
+//!
+//! ## Replay protection
+//! Every [`Request`] carries a Unix timestamp (`ts`). [`deserialize_packet`] rejects packets whose
+//! `ts` deviates more than [`REPLAY_WINDOW_SECS`] (30 s) from the server clock. Combined with the
+//! optional Redis `replay_store` in the interceptor, this prevents both delayed-replay and
+//! duplicate-submission attacks.
 use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
 use serde_bytes::ByteBuf;
@@ -13,8 +53,8 @@ use crate::tools::crypt::{aes_encrypt, aes_decrypt};
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
 use rand_core::{RngCore, OsRng};
 
-/// Acceptable clock skew in seconds for replay protection.
-const REPLAY_WINDOW_SECS: i64 = 30;
+/// Maximum acceptable timestamp skew (seconds) between client and server for replay protection.
+pub const REPLAY_WINDOW_SECS: i64 = 30;
 
 /// Derives a 32-byte AES wrapping key from the ECDH shared secret via HKDF-SHA256,
 /// binding both parties' public keys into the derivation via the salt.
@@ -334,8 +374,6 @@ mod tests {
     /// Mirrors the steps the interceptor performs on the server side.
     #[test]
     fn request_response_full_roundtrip() {
-        use x25519_dalek::{EphemeralSecret, PublicKey as X25519PublicKey};
-
         let server_sk       = EphemeralSecret::random_from_rng(OsRng);
         let server_pk       = X25519PublicKey::from(&server_sk);
         let server_pk_bytes: [u8; 32] = server_pk.to_bytes();

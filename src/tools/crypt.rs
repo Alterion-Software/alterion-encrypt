@@ -1,4 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0
+//! Symmetric crypto primitives used by the pipeline.
+//!
+//! ## AES-256-GCM
+//! [`aes_encrypt`] and [`aes_decrypt`] are the workhorse functions. Nonces are randomly
+//! generated per call and prepended to the ciphertext so callers only handle a single opaque blob.
+//!
+//! ## Password hashing
+//! [`hash_password`] applies HMAC-SHA256 with an OS-keyring pepper before running Argon2id.
+//! The pepper version is stored alongside the hash so [`verify_password`] can fetch the exact
+//! pepper version that was active at hash time — enabling `rotate_pepper` without a forced
+//! re-hash of all existing passwords.
+//!
+//! ## Key-encrypted blobs
+//! [`key_encrypt`] / [`key_decrypt`] derive an AES-256 key from a password via Argon2id and
+//! return a self-contained base64 blob (salt ‖ nonce ‖ ciphertext). Intended for encrypting
+//! small secrets (API keys, private key material) at rest.
 use aes_gcm::{
     Aes256Gcm, Key, Nonce,
     aead::{Aead, AeadCore, KeyInit, OsRng as AesOsRng},
@@ -9,6 +25,7 @@ use argon2::password_hash::rand_core::OsRng;
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use rand_core::RngCore;
 use zeroize::{Zeroize, Zeroizing};
+use anyhow::Context as _;
 use crate::tools::helper::{hmac, pstore, sha2};
 
 #[derive(Debug, thiserror::Error)]
@@ -28,7 +45,18 @@ fn argon2_instance() -> Argon2<'static> {
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
 }
 
-/// Hashes a password with HMAC-pepper + Argon2id and returns the PHC hash string and pepper version.
+/// Hashes a password using HMAC-SHA256 (pepper) + Argon2id and returns `(phc_string, pepper_version)`.
+///
+/// ## Process
+/// 1. Fetch the current pepper from the OS keyring via [`crate::tools::helper::pstore`].
+/// 2. Compute `peppered = HMAC-SHA256(password, pepper)` to bind the hash to a secret that lives
+///    outside the database.
+/// 3. Run Argon2id (65 536 KiB, 3 passes, 4 lanes) over the peppered value with a random salt.
+/// 4. Return the PHC-format hash string and the **pepper version** so the caller can store both
+///    alongside the hash. Pass the version back to [`verify_password`] at login time.
+///
+/// Both `pepper` and the intermediate `peppered` value are [`Zeroizing`]-wrapped and wiped from
+/// memory after use.
 pub fn hash_password(password: &str) -> Result<(String, i16), CryptError> {
     let (pepper_bytes, version) = pstore::get_current_pepper()
         .map_err(|e| CryptError::PstoreError(e.to_string()))?;
@@ -46,7 +74,14 @@ pub fn hash_password(password: &str) -> Result<(String, i16), CryptError> {
     Ok((hash, version))
 }
 
-/// Verifies a password against a stored Argon2id PHC hash using the specified pepper version.
+/// Verifies `password` against a stored Argon2id PHC hash using the given pepper version.
+///
+/// Fetches the pepper at `pepper_version` from the OS keyring (not necessarily the *current*
+/// pepper — this is intentional so old hashes remain verifiable after a [`crate::tools::helper::pstore::rotate_pepper`]).
+/// Recomputes `HMAC-SHA256(password, pepper)` then delegates to Argon2's constant-time verifier.
+///
+/// Returns `Ok(true)` on match, `Ok(false)` on mismatch, and `Err` only for keyring or hash
+/// parse failures.
 pub fn verify_password(password: &str, hash: &str, pepper_version: i16) -> Result<bool, CryptError> {
     let pepper_bytes = pstore::get_pepper(pepper_version)
         .map_err(|e| CryptError::PstoreError(e.to_string()))?;
@@ -116,8 +151,14 @@ fn derive_key_from_password(password: &str, salt: &[u8]) -> [u8; 32] {
     key
 }
 
-/// Encrypts a plaintext string with a password-derived AES-256-GCM key and returns a base64 blob
-/// containing the 16-byte salt, 12-byte nonce, and ciphertext.
+/// Encrypts `plaintext` with a password-derived AES-256-GCM key.
+///
+/// Returns a base64-encoded blob with layout: `[16-byte Argon2id salt][12-byte AES-GCM nonce][ciphertext]`.
+/// The salt and nonce are randomly generated per call so the same plaintext + password always
+/// produces a different blob. Pass the blob to [`key_decrypt`] with the same password to recover
+/// the original string.
+///
+/// Intended for encrypting small secrets at rest (e.g. private key material, API tokens).
 pub fn key_encrypt(plaintext: &str, password: &str) -> anyhow::Result<String> {
     let mut salt = [0u8; 16];
     AesOsRng.fill_bytes(&mut salt);
@@ -140,7 +181,6 @@ pub fn key_encrypt(plaintext: &str, password: &str) -> anyhow::Result<String> {
 
 /// Decrypts a base64 blob produced by `key_encrypt` using the given password.
 pub fn key_decrypt(blob_str: &str, password: &str) -> anyhow::Result<String> {
-    use anyhow::Context as _;
     let data = B64.decode(blob_str).context("Failed to decode blob")?;
     if data.len() < 29 { anyhow::bail!("Blob too short"); }
     let (salt, rest)      = data.split_at(16);

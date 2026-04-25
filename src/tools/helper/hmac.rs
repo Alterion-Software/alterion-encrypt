@@ -1,4 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0
+//! HMAC-SHA256 signing and verification.
+//!
+//! [`sign`] produces a 32-byte tag and [`verify`] checks one using the constant-time
+//! [`Mac::verify_slice`] to prevent timing-based forgery. Used by the pipeline to authenticate
+//! response ciphertext so the client can detect tampering before attempting decryption.
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 

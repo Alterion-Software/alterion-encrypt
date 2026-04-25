@@ -1,4 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0
+//! SHA-256 hashing utilities.
+//!
+//! Thin wrappers around the [`sha2`](::sha2) crate. [`hash`] returns raw 32-byte digests;
+//! [`hash_hex`] and [`hash_string`] return lowercase hex strings. [`hash_file`] streams a file
+//! in 8 KiB chunks to avoid loading large files into memory.
 use sha2::{Digest, Sha256};
 use std::io::Read;
 
