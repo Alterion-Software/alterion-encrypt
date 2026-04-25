@@ -14,12 +14,28 @@ use crate::tools::crypt::aes_decrypt;
 use crate::tools::serializer::{deserialize_packet, build_signed_response_raw, derive_wrap_key};
 use zeroize::ZeroizeOnDrop;
 
-/// Injected into request extensions after successful decryption of an encrypted request body.
+/// Raw decrypted request body, injected into Actix request extensions by [`Interceptor`] after a
+/// packet is successfully validated and decrypted.
+///
+/// Retrieve it inside a handler with:
+/// ```rust,ignore
+/// let body = req.extensions().get::<DecryptedBody>().cloned();
+/// ```
+/// `body.0` contains the original plaintext bytes as sent by the client (post-AES-GCM decrypt,
+/// before any application-level deserialisation). The bytes are in the same format the client
+/// packed them: msgpack-encoded `ByteBuf` wrapping deflate-compressed JSON.
+/// Use [`crate::tools::serializer::decode_request_payload`] to complete the decode.
 #[derive(Clone)]
 pub struct DecryptedBody(pub Vec<u8>);
 
-/// Injected alongside `DecryptedBody`; carries the per-request AES key so the response can be
-/// encrypted with the same key the client generated. Zeroized on drop.
+/// Per-request AES-256 session key, injected alongside [`DecryptedBody`].
+///
+/// The interceptor stores this so the **response** can be encrypted with the exact same key that
+/// the client generated for this request. The client holds the key in memory indexed by request
+/// ID and passes it to [`crate::tools::serializer::decode_response_packet`] to decrypt the reply.
+///
+/// Zeroized on drop — the key material is cleared from memory as soon as the response has been
+/// sent and this struct is dropped.
 #[derive(Clone, ZeroizeOnDrop)]
 pub struct RequestSessionKeys {
     pub enc_key: [u8; 32],
@@ -80,6 +96,11 @@ where
     }
 }
 
+/// The concrete [`Service`](actix_web::dev::Service) produced by [`Interceptor::new_transform`].
+///
+/// One instance is created per worker thread. Holds `Rc`-wrapped references to the inner service
+/// and `Arc`-shared references to the key/handshake/replay stores. Not constructed directly —
+/// Actix creates it automatically when the middleware is mounted.
 pub struct InterceptorService<S> {
     service:         Rc<S>,
     key_store:       Arc<RwLock<KeyStore>>,

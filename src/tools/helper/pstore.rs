@@ -1,14 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0
-//! Cross-platform pepper store.
+//! OS-keyring pepper store for the Argon2id password hasher.
 //!
-//! **Default** — backed by the Linux kernel keyring via [`keyutils`].  No D-Bus or Secret
-//! Service daemon is required; works on any kernel ≥ 2.6.10.
+//! ## What is a pepper?
+//! A pepper is a 32-byte random secret stored **outside** the database (in the OS keyring) and
+//! mixed into the password hash via HMAC-SHA256 before Argon2id runs. If the database is
+//! exfiltrated without the keyring, offline brute-force attacks are infeasible even for weak
+//! passwords.
 //!
-//! **Windows** (`features = ["win64"]`) — backed by Windows Credential Manager via the
-//! [`keyring`] crate.  Enable this when building for Windows targets.
+//! ## Backends
+//! - **Default (Linux)** — backed by the kernel keyring via [`keyutils`]. No D-Bus or Secret
+//!   Service daemon required; works on any kernel ≥ 2.6.10.
+//! - **Windows** (`features = ["win64"]`) — backed by Windows Credential Manager via [`keyring`].
 //!
-//! Peppers are 32 random bytes stored as lowercase hex strings.  A version pointer key tracks
-//! the current active version so that [`rotate_pepper`] advances correctly beyond v2.
+//! ## Storage layout
+//! | Key name | Value |
+//! |----------|-------|
+//! | `alterion_pepper_v1` | Lowercase hex of 32 random bytes |
+//! | `alterion_pepper_v2` | … next version after rotation … |
+//! | `alterion_pepper_current_v` | Version number of the active pepper (e.g. `"1"`) |
+//!
+//! ## Pepper rotation
+//! Call [`rotate_pepper`] to generate a new pepper at `current_version + 1` and advance the
+//! version pointer. Old pepper versions are **not deleted** — [`verify_password`](crate::tools::crypt::verify_password)
+//! accepts a `pepper_version` argument so existing hashes remain verifiable indefinitely.
+//! Re-hash on next successful login to migrate users to the new pepper.
 
 use zeroize::Zeroizing;
 
@@ -103,13 +118,19 @@ fn set_current_version(version: i16) -> Result<(), PstoreError> {
     store_set(VERSION_POINTER_KEY, &version.to_string())
 }
 
-/// Returns the current pepper bytes and version number, generating and storing one if absent.
+/// Returns `(pepper_bytes, version)` for the currently active pepper, lazily creating v1 if none exists.
+///
+/// This is the function [`crate::tools::crypt::hash_password`] calls. The returned `version` must
+/// be persisted alongside the password hash so the correct pepper can be fetched at verify time.
 pub fn get_current_pepper() -> Result<([u8; 32], i16), PstoreError> {
     let version = read_current_version()?;
     get_pepper(version).map(|p| (p, version))
 }
 
-/// Retrieves a specific pepper version from the keystore, generating and storing one if absent.
+/// Retrieves the pepper at `version` from the keystore, generating and persisting it if absent.
+///
+/// Called by [`crate::tools::crypt::verify_password`] with the version stored at hash time.
+/// Old versions are kept indefinitely — rotation does not delete them.
 pub fn get_pepper(version: i16) -> Result<[u8; 32], PstoreError> {
     match store_get(&key_name(version))? {
         Some(hex_str) => {
@@ -133,8 +154,12 @@ fn generate_pepper() -> [u8; 32] {
     rand::random()
 }
 
-/// Generates a new pepper at `current_version + 1`, stores it, advances the version pointer,
-/// and returns the new version number.
+/// Rotates to a new pepper: generates 32 random bytes, stores them at `current_version + 1`,
+/// advances the version pointer, and returns the new version number.
+///
+/// Existing hashes are **not invalidated** — they still reference their original version, which
+/// remains in the keyring. To fully migrate, re-hash users' passwords on their next successful
+/// login using [`crate::tools::crypt::hash_password`] (which will pick up the new active version).
 pub fn rotate_pepper() -> Result<i16, PstoreError> {
     let current     = read_current_version()?;
     let new_version = current + 1;
