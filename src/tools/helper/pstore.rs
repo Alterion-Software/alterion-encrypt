@@ -88,7 +88,8 @@ pub fn get_pepper(version: i16) -> Result<[u8; 32], PstoreError> {
 
 fn generate_pepper() -> [u8; 32] {
     let mut buf = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut buf);
+    use rand_core::RngCore;
+    rand_core::OsRng.fill_bytes(&mut buf);
     buf
 }
 

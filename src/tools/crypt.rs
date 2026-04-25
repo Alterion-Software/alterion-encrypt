@@ -7,7 +7,7 @@ use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVe
 use argon2::password_hash::SaltString;
 use argon2::password_hash::rand_core::OsRng;
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
-use rand::RngCore;
+use rand_core::RngCore;
 use zeroize::{Zeroize, Zeroizing};
 use crate::tools::helper::{hmac, pstore, sha2};
 
@@ -94,7 +94,7 @@ pub fn aes_decrypt(data: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, CryptError> {
 /// Generates `bytes` random bytes and returns them as a lowercase hex string.
 pub fn generate_random_hex(bytes: usize) -> String {
     let mut buf = vec![0u8; bytes];
-    rand::thread_rng().fill_bytes(&mut buf);
+    rand_core::OsRng.fill_bytes(&mut buf);
     buf.iter().fold(String::with_capacity(bytes * 2), |mut acc, b| {
         use std::fmt::Write;
         let _ = write!(acc, "{:02x}", b);
