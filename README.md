@@ -8,13 +8,13 @@
 
 <div align="center">
 
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/alterion-encrypt.svg)](https://crates.io/crates/alterion-encrypt)
 [![Rust](https://img.shields.io/badge/Rust-2024-orange?style=flat&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Actix-web](https://img.shields.io/badge/Actix--web-4-green?style=flat)](https://actix.rs/)
 [![AES-256-GCM](https://img.shields.io/badge/AES--256--GCM-Encrypted-blue?style=flat)](https://docs.rs/aes-gcm)
 [![GitHub](https://img.shields.io/badge/GitHub-Alterion--Software-181717?style=flat&logo=github&logoColor=white)](https://github.com/Alterion-Software)
-[![Socket Badge](https://badge.socket.dev/cargo/package/alterion-encrypt/1.3.2)](https://badge.socket.dev/cargo/package/alterion-encrypt/1.3.2)
+[![Socket Badge](https://badge.socket.dev/cargo/package/alterion-encrypt/1.4.1)](https://badge.socket.dev/cargo/package/alterion-encrypt/1.4.1)
 
 _A full end-to-end encryption pipeline for Actix-web — X25519 ECDH key exchange, AES-256-GCM session encryption, Argon2id password hashing, and a MessagePack + Deflate request/response pipeline, all behind a single middleware._
 
