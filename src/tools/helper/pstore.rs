@@ -11,6 +11,11 @@
 //! - **Default (Linux)** — backed by the kernel keyring via [`keyutils`]. No D-Bus or Secret
 //!   Service daemon required; works on any kernel ≥ 2.6.10.
 //! - **Windows** (`features = ["win64"]`) — backed by Windows Credential Manager via [`keyring`].
+//! - **File** (set the `ALTERION_PEPPER_DIR` env var) — reads/writes one file per key in that
+//!   directory instead of the keyring. For containers, where the default Docker seccomp
+//!   profile blocks the keyring syscalls (`keyctl`/`add_key`/`request_key`). Feed the
+//!   directory from an out-of-band encrypted store (e.g. SOPS+age) unsealed to a tmpfs mount.
+//!   When the env var is unset the keyring backend is used (unchanged default).
 //!
 //! ## Storage layout
 //! | Key name | Value |
@@ -44,7 +49,7 @@ pub enum PstoreError {
 // ── Linux kernel keyring backend (default) ──────────────────────────────────
 
 #[cfg(not(feature = "win64"))]
-fn store_get(key: &str) -> Result<Option<String>, PstoreError> {
+fn keyring_get(key: &str) -> Result<Option<String>, PstoreError> {
     use keyutils::{Keyring, SpecialKeyring, keytypes::User};
 
     let ring = Keyring::attach_or_create(SpecialKeyring::User)
@@ -64,7 +69,7 @@ fn store_get(key: &str) -> Result<Option<String>, PstoreError> {
 }
 
 #[cfg(not(feature = "win64"))]
-fn store_set(key: &str, value: &str) -> Result<(), PstoreError> {
+fn keyring_set(key: &str, value: &str) -> Result<(), PstoreError> {
     use keyutils::{Keyring, SpecialKeyring, keytypes::User};
 
     let mut ring = Keyring::attach_or_create(SpecialKeyring::User)
@@ -79,7 +84,7 @@ fn store_set(key: &str, value: &str) -> Result<(), PstoreError> {
 // ── Windows Credential Manager backend (feature = "win64") ──────────────────
 
 #[cfg(feature = "win64")]
-fn store_get(key: &str) -> Result<Option<String>, PstoreError> {
+fn keyring_get(key: &str) -> Result<Option<String>, PstoreError> {
     use keyring::Entry;
 
     let entry = Entry::new(SERVICE, key)
@@ -92,13 +97,56 @@ fn store_get(key: &str) -> Result<Option<String>, PstoreError> {
 }
 
 #[cfg(feature = "win64")]
-fn store_set(key: &str, value: &str) -> Result<(), PstoreError> {
+fn keyring_set(key: &str, value: &str) -> Result<(), PstoreError> {
     use keyring::Entry;
 
     Entry::new(SERVICE, key)
         .map_err(|e| PstoreError::KeystoreError(e.to_string()))?
         .set_password(value)
         .map_err(|e| PstoreError::KeystoreError(e.to_string()))
+}
+
+// ── File backend (containers: set ALTERION_PEPPER_DIR) ──────────────────────
+//
+// Docker's default seccomp profile blocks the kernel-keyring syscalls (keyctl/add_key/
+// request_key), so in a container the pepper is read from files in `ALTERION_PEPPER_DIR`
+// (one file per key name, lowercase-hex contents). The durable source is an out-of-band
+// encrypted store (SOPS+age) unsealed to a tmpfs dir and bind-mounted read-only. When the
+// env var is unset, the OS keyring backend above is used (unchanged default — the website
+// and panel are unaffected).
+
+const PEPPER_DIR_ENV: &str = "ALTERION_PEPPER_DIR";
+
+fn file_get(dir: &str, key: &str) -> Result<Option<String>, PstoreError> {
+    let path = std::path::Path::new(dir).join(key);
+    match std::fs::read_to_string(&path) {
+        Ok(s) => Ok(Some(s.trim().to_string())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(PstoreError::KeystoreError(e.to_string())),
+    }
+}
+
+fn file_set(dir: &str, key: &str, value: &str) -> Result<(), PstoreError> {
+    let path = std::path::Path::new(dir).join(key);
+    // On a read-only mount this fails loudly — which is correct: a missing pepper must NOT
+    // be silently regenerated (that's the bug that breaks every existing hash on restart).
+    std::fs::write(&path, value).map_err(|e| PstoreError::KeystoreError(e.to_string()))
+}
+
+// ── Backend dispatch ─────────────────────────────────────────────────────────
+
+fn store_get(key: &str) -> Result<Option<String>, PstoreError> {
+    match std::env::var(PEPPER_DIR_ENV) {
+        Ok(dir) if !dir.is_empty() => file_get(&dir, key),
+        _ => keyring_get(key),
+    }
+}
+
+fn store_set(key: &str, value: &str) -> Result<(), PstoreError> {
+    match std::env::var(PEPPER_DIR_ENV) {
+        Ok(dir) if !dir.is_empty() => file_set(&dir, key, value),
+        _ => keyring_set(key, value),
+    }
 }
 
 // ── Shared logic ─────────────────────────────────────────────────────────────
